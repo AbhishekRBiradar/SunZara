@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../../core/models/playback_context.dart';
 import '../../../core/models/playlist.dart';
@@ -7,8 +8,12 @@ import '../../../core/theme/app_typography.dart';
 import '../../../core/theme/theme_controller.dart';
 import '../../../core/widgets/deterministic_artwork.dart';
 import '../../../core/widgets/song_artwork.dart';
+import '../../audio/domain/playback_state_model.dart';
 import '../../audio/presentation/playback_controller.dart';
+import '../../database/app_database.dart';
 import '../../library/domain/music_repository.dart';
+import '../../now_playing/presentation/widgets/mini_player.dart';
+import '../../audio/domain/youtube_stream_service.dart';
 
 class PlaylistsScreen extends StatefulWidget {
   final MusicRepository repository;
@@ -27,16 +32,34 @@ class PlaylistsScreen extends StatefulWidget {
 class _PlaylistsScreenState extends State<PlaylistsScreen> {
   List<Playlist> _playlists = [];
   bool _isLoading = true;
+  StreamSubscription<void>? _repoSub;
 
   @override
   void initState() {
     super.initState();
     _loadPlaylists();
+    _repoSub = widget.repository.changes.listen((_) {
+      _loadPlaylists(showLoading: false);
+    });
   }
 
-  Future<void> _loadPlaylists() async {
-    setState(() => _isLoading = true);
+  @override
+  void dispose() {
+    _repoSub?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _loadPlaylists({bool showLoading = true}) async {
+    if (showLoading) setState(() => _isLoading = true);
     final pls = await widget.repository.getAllPlaylists();
+    pls.sort((a, b) {
+      final aLiked = a.id == AppDatabase.likedSongsPlaylistId ||
+          a.name.trim().toLowerCase() == AppDatabase.likedSongsPlaylistName.toLowerCase();
+      final bLiked = b.id == AppDatabase.likedSongsPlaylistId ||
+          b.name.trim().toLowerCase() == AppDatabase.likedSongsPlaylistName.toLowerCase();
+      if (aLiked != bLiked) return aLiked ? -1 : 1;
+      return b.createdAt.compareTo(a.createdAt);
+    });
     if (mounted) {
       setState(() {
         _playlists = pls;
@@ -224,11 +247,24 @@ class _PlaylistsScreenState extends State<PlaylistsScreen> {
   }
 
   Widget _buildPlaylistTile(Playlist pl) {
+    final isLikedPlaylist = pl.id == AppDatabase.likedSongsPlaylistId ||
+        pl.name.trim().toLowerCase() == AppDatabase.likedSongsPlaylistName.toLowerCase();
     return ListTile(
-      leading: ClipRRect(
-        borderRadius: BorderRadius.circular(8),
-        child: DeterministicArtwork(seed: pl.id, size: 48),
-      ),
+      leading: isLikedPlaylist
+          ? Container(
+              width: 48,
+              height: 48,
+              decoration: BoxDecoration(
+                color: AppColors.primary.withAlpha(35),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: AppColors.primary.withAlpha(110), width: 1),
+              ),
+              child: Icon(Icons.favorite_rounded, color: AppColors.primary, size: 24),
+            )
+          : ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: DeterministicArtwork(seed: pl.id, size: 48),
+            ),
       title: Text(pl.name, style: AppTypography.songTitle),
       subtitle: Text('${pl.trackCount} tracks', style: AppTypography.caption),
       trailing: PopupMenuButton<String>(
@@ -316,6 +352,9 @@ class _PlaylistDetailPageState extends State<_PlaylistDetailPage> {
   void initState() {
     super.initState();
     _tracks = List.from(widget.songs);
+    if (_tracks.isNotEmpty) {
+      YouTubeStreamService.instance.prewarmSongs(_tracks.take(15).toList());
+    }
   }
 
   @override
@@ -323,12 +362,24 @@ class _PlaylistDetailPageState extends State<_PlaylistDetailPage> {
     final totalDurationMs = _tracks.fold<int>(0, (sum, s) => sum + s.durationMs);
     final totalMinutes = (totalDurationMs / 60000).round();
 
-    return Scaffold(
-      backgroundColor: AppColors.background,
-      appBar: AppBar(
-        title: Text(widget.title, style: AppTypography.headingSmall),
-      ),
-      body: Column(
+    return ValueListenableBuilder<PlaybackStateModel>(
+      valueListenable: widget.playbackController,
+      builder: (context, playbackState, _) {
+        return Scaffold(
+          backgroundColor: AppColors.background,
+          appBar: AppBar(
+            title: Text(widget.title, style: AppTypography.headingSmall),
+          ),
+          bottomNavigationBar: playbackState.currentSong != null
+              ? SafeArea(
+                  top: false,
+                  child: MiniPlayer(
+                    playbackState: playbackState,
+                    controller: widget.playbackController,
+                  ),
+                )
+              : null,
+          body: Column(
         children: [
           Padding(
             padding: const EdgeInsets.all(16),
@@ -423,7 +474,61 @@ class _PlaylistDetailPageState extends State<_PlaylistDetailPage> {
                           size: 40,
                           borderRadius: BorderRadius.circular(6),
                         ),
-                        title: Text(song.title, style: AppTypography.songTitle, maxLines: 1),
+                        title: Row(
+                          children: [
+                            Expanded(
+                              child: Text(song.title, style: AppTypography.songTitle, maxLines: 1),
+                            ),
+                            if (song.isOnline)
+                              Container(
+                                margin: const EdgeInsets.only(left: 6),
+                                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: AppColors.primary.withOpacity(0.15),
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(Icons.stream_rounded, size: 10, color: AppColors.primary),
+                                    const SizedBox(width: 3),
+                                    Text(
+                                      'Stream',
+                                      style: TextStyle(
+                                        fontSize: 9,
+                                        color: AppColors.primary,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              )
+                            else
+                              Container(
+                                margin: const EdgeInsets.only(left: 6),
+                                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: AppColors.surfaceHighlight,
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(Icons.check_circle_outline_rounded, size: 10, color: AppColors.textSecondary),
+                                    const SizedBox(width: 3),
+                                    Text(
+                                      'Offline',
+                                      style: TextStyle(
+                                        fontSize: 9,
+                                        color: AppColors.textSecondary,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                          ],
+                        ),
                         subtitle: Text('${song.artist} • ${song.formattedDuration}', style: AppTypography.caption),
                         trailing: widget.isSmart
                             ? null
@@ -453,6 +558,8 @@ class _PlaylistDetailPageState extends State<_PlaylistDetailPage> {
           ),
         ],
       ),
+    );
+      },
     );
   }
 }

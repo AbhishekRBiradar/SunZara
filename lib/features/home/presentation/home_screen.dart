@@ -9,6 +9,7 @@ import '../../../core/widgets/sunzara_logo.dart';
 import '../../audio/presentation/playback_controller.dart';
 import '../../library/data/mediastore_scanner.dart';
 import '../../library/domain/music_repository.dart';
+import '../../search/presentation/online_search_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   final MusicRepository repository;
@@ -202,6 +203,20 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               ),
               IconButton(
+                icon: Icon(Icons.travel_explore_rounded, color: AppColors.primary),
+                tooltip: 'Search Online Music',
+                onPressed: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => OnlineSearchScreen(
+                        repository: widget.repository,
+                        playbackController: widget.playbackController,
+                      ),
+                    ),
+                  );
+                },
+              ),
+              IconButton(
                 icon: Icon(Icons.sync_rounded, color: AppColors.primary),
                 tooltip: 'Scan My Music',
                 onPressed: _triggerScan,
@@ -227,6 +242,58 @@ class _HomeScreenState extends State<HomeScreen> {
                   children: [
                     // Personalized greeting
                     Text(_getGreeting(), style: AppTypography.headingLarge),
+                    const SizedBox(height: 14),
+                    // Quick Online Music Search Bar
+                    InkWell(
+                      borderRadius: BorderRadius.circular(14),
+                      onTap: () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => OnlineSearchScreen(
+                              repository: widget.repository,
+                              playbackController: widget.playbackController,
+                            ),
+                          ),
+                        );
+                      },
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                        decoration: BoxDecoration(
+                          color: AppColors.surface,
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(color: AppColors.divider, width: 0.9),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(Icons.search_rounded, color: AppColors.primary, size: 20),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Text(
+                                'Search any song on the internet...',
+                                style: AppTypography.caption.copyWith(fontSize: 13),
+                              ),
+                            ),
+                            IconButton(
+                              tooltip: 'Voice Search',
+                              padding: EdgeInsets.zero,
+                              constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                              icon: Icon(Icons.mic_rounded, color: AppColors.primary, size: 20),
+                              onPressed: () {
+                                Navigator.of(context).push(
+                                  MaterialPageRoute(
+                                    builder: (_) => OnlineSearchScreen(
+                                      repository: widget.repository,
+                                      playbackController: widget.playbackController,
+                                      startVoiceSearch: true,
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
                     const SizedBox(height: 16),
 
                     // Quick Actions Row
@@ -404,7 +471,7 @@ class _HomeScreenState extends State<HomeScreen> {
               widget.playbackController.playSong(
                 song,
                 PlaybackContext.library,
-                songs,
+                [song],
               );
             },
             child: SizedBox(

@@ -190,8 +190,24 @@ class _MiniPlayerState extends State<MiniPlayer> {
                         ),
                       ),
                     ),
+                    // Like/Favorite button (syncs Favorites & Liked Songs playlist)
+                    IconButton(
+                      tooltip: song.isFavorite ? 'Unlike song' : 'Like song',
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                      icon: Icon(
+                        song.isFavorite
+                            ? Icons.favorite_rounded
+                            : Icons.favorite_border_rounded,
+                        color: song.isFavorite ? AppColors.primary : AppColors.textSecondary,
+                        size: 22,
+                      ),
+                      onPressed: () => widget.controller.toggleFavorite(),
+                    ),
                     // Play/Pause button
                     IconButton(
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(minWidth: 38, minHeight: 38),
                       icon: Icon(
                         widget.playbackState.isPlaying
                             ? Icons.pause_rounded
@@ -203,6 +219,8 @@ class _MiniPlayerState extends State<MiniPlayer> {
                     ),
                     // Next track button
                     IconButton(
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
                       icon: Icon(
                         Icons.skip_next_rounded,
                         color: AppColors.textSecondary,

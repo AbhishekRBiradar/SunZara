@@ -48,6 +48,13 @@ class Song {
     return '$minutes:${seconds.toString().padLeft(2, '0')}';
   }
 
+  bool get isOnline =>
+      filePath.startsWith('yt:') ||
+      filePath.startsWith('http://') ||
+      filePath.startsWith('https://');
+
+  bool get isOffline => !isOnline;
+
   Song copyWith({
     String? id,
     String? title,

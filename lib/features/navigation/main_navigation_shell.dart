@@ -30,6 +30,7 @@ class MainNavigationShell extends StatefulWidget {
 
 class _MainNavigationShellState extends State<MainNavigationShell> {
   int _currentIndex = 0;
+  final List<bool> _visitedTabs = [true, false, false, false, false];
 
   List<Widget> _buildTabs() => [
         HomeScreen(
@@ -37,30 +38,48 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
           repository: widget.repository,
           playbackController: widget.playbackController,
           scanner: widget.scanner,
-          onOpenLibrary: () => setState(() => _currentIndex = 1),
-          onOpenSettings: () => setState(() => _currentIndex = 4),
+          onOpenLibrary: () => setState(() {
+            _visitedTabs[1] = true;
+            _currentIndex = 1;
+          }),
+          onOpenSettings: () => setState(() {
+            _visitedTabs[4] = true;
+            _currentIndex = 4;
+          }),
         ),
-        LibraryScreen(
-          key: const ValueKey('tab_library'),
-          repository: widget.repository,
-          playbackController: widget.playbackController,
-        ),
-        PlaylistsScreen(
-          key: const ValueKey('tab_playlists'),
-          repository: widget.repository,
-          playbackController: widget.playbackController,
-        ),
-        FavoritesScreen(
-          key: const ValueKey('tab_favorites'),
-          repository: widget.repository,
-          playbackController: widget.playbackController,
-        ),
-        SettingsScreen(
-          key: const ValueKey('tab_settings'),
-          repository: widget.repository,
-          playbackController: widget.playbackController,
-          scanner: widget.scanner,
-        ),
+        if (_visitedTabs[1])
+          LibraryScreen(
+            key: const ValueKey('tab_library'),
+            repository: widget.repository,
+            playbackController: widget.playbackController,
+          )
+        else
+          const SizedBox.shrink(),
+        if (_visitedTabs[2])
+          PlaylistsScreen(
+            key: const ValueKey('tab_playlists'),
+            repository: widget.repository,
+            playbackController: widget.playbackController,
+          )
+        else
+          const SizedBox.shrink(),
+        if (_visitedTabs[3])
+          FavoritesScreen(
+            key: const ValueKey('tab_favorites'),
+            repository: widget.repository,
+            playbackController: widget.playbackController,
+          )
+        else
+          const SizedBox.shrink(),
+        if (_visitedTabs[4])
+          SettingsScreen(
+            key: const ValueKey('tab_settings'),
+            repository: widget.repository,
+            playbackController: widget.playbackController,
+            scanner: widget.scanner,
+          )
+        else
+          const SizedBox.shrink(),
       ];
 
   @override
@@ -88,7 +107,10 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
                     ),
                   NavigationBar(
                     selectedIndex: _currentIndex,
-                    onDestinationSelected: (idx) => setState(() => _currentIndex = idx),
+                    onDestinationSelected: (idx) => setState(() {
+                      _visitedTabs[idx] = true;
+                      _currentIndex = idx;
+                    }),
                     backgroundColor: AppColors.surface,
                     destinations: const [
                       NavigationDestination(

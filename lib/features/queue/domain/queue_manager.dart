@@ -35,6 +35,16 @@ class QueueManager {
         ..._automaticPool,
       ];
 
+  /// Peeks the next [count] upcoming songs in queue order for preloading
+  List<Song> peekUpcoming({int count = 3}) {
+    final result = <Song>[];
+    for (final item in fullUpcomingQueue) {
+      result.add(item.song);
+      if (result.length >= count) break;
+    }
+    return result;
+  }
+
   String _generateQueueId() {
     _queueCounter++;
     return 'q_${DateTime.now().millisecondsSinceEpoch}_$_queueCounter';
@@ -178,6 +188,36 @@ class QueueManager {
           type: QueueItemType.automatic,
         ),
       );
+    }
+  }
+
+  /// Updates cached favorite metadata across active, queued, and history entries.
+  void updateSongFavoriteStatus(String songId, bool isFavorite) {
+    if (_currentSong?.id == songId) {
+      _currentSong = _currentSong!.copyWith(isFavorite: isFavorite);
+    }
+    for (var i = 0; i < _manualQueue.length; i++) {
+      if (_manualQueue[i].song.id == songId) {
+        _manualQueue[i] = QueueItem(
+          queueId: _manualQueue[i].queueId,
+          song: _manualQueue[i].song.copyWith(isFavorite: isFavorite),
+          type: _manualQueue[i].type,
+        );
+      }
+    }
+    for (var i = 0; i < _automaticPool.length; i++) {
+      if (_automaticPool[i].song.id == songId) {
+        _automaticPool[i] = QueueItem(
+          queueId: _automaticPool[i].queueId,
+          song: _automaticPool[i].song.copyWith(isFavorite: isFavorite),
+          type: _automaticPool[i].type,
+        );
+      }
+    }
+    for (var i = 0; i < _history.length; i++) {
+      if (_history[i].id == songId) {
+        _history[i] = _history[i].copyWith(isFavorite: isFavorite);
+      }
     }
   }
 

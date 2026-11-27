@@ -1,5 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:drift/native.dart';
+import 'package:sunzara/features/audio/domain/local_stream_proxy.dart';
+import 'package:sunzara/features/audio/domain/youtube_stream_service.dart';
 import 'package:sunzara/features/audio/domain/sunzara_audio_handler.dart';
 import 'package:sunzara/features/audio/presentation/playback_controller.dart';
 import 'package:sunzara/features/database/app_database.dart';
@@ -43,6 +45,8 @@ void main() {
 
     controller.dispose();
     scanner.dispose();
+    LocalStreamProxy.instance.close();
+    YouTubeStreamService.instance.close();
     await db.close();
   });
 }

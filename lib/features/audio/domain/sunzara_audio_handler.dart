@@ -1,19 +1,35 @@
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:audio_service/audio_service.dart';
 import 'package:audio_session/audio_session.dart';
 import 'package:just_audio/just_audio.dart';
 import '../../../core/models/song.dart';
+import 'local_stream_proxy.dart';
+import 'youtube_stream_service.dart';
 
 class SunZaraAudioHandler extends BaseAudioHandler with SeekHandler {
-  final AudioPlayer _player = AudioPlayer();
+  final AudioPlayer _player = AudioPlayer(
+    handleInterruptions: false,
+    audioLoadConfiguration: const AudioLoadConfiguration(
+      androidLoadControl: AndroidLoadControl(
+        minBufferDuration: Duration(seconds: 20),
+        maxBufferDuration: Duration(seconds: 60),
+        bufferForPlaybackDuration: Duration(milliseconds: 1200),
+        bufferForPlaybackAfterRebufferDuration: Duration(seconds: 2),
+        backBufferDuration: Duration(seconds: 15),
+      ),
+    ),
+  );
 
   bool _playInterrupted = false;
   bool _userExplicitlyPaused = true;
+  int _setSongGeneration = 0;
 
   Future<void> Function()? onNextRequested;
   Future<void> Function()? onPreviousRequested;
   Future<void> Function()? onPlayRequested;
   Future<void> Function()? onPauseRequested;
+  void Function(String message)? onPlaybackError;
 
   AudioPlayer get player => _player;
   int? get audioSessionId => _player.androidAudioSessionId;
@@ -22,6 +38,8 @@ class SunZaraAudioHandler extends BaseAudioHandler with SeekHandler {
     _initInitialState();
     _initAudioSession();
     _broadcastPlayerState();
+    unawaited(LocalStreamProxy.instance.ensureStarted());
+    unawaited(YouTubeStreamService.instance.initDiskCache());
   }
 
   void _initInitialState() {
@@ -53,9 +71,11 @@ class SunZaraAudioHandler extends BaseAudioHandler with SeekHandler {
 
     // Pause when headphones/bluetooth disconnect (BECOMING_NOISY)
     session.becomingNoisyEventStream.listen((_) {
-      _userExplicitlyPaused = true;
-      _playInterrupted = false;
-      pause();
+      if (_player.playing) {
+        _userExplicitlyPaused = true;
+        _playInterrupted = false;
+        pause();
+      }
     });
 
     // Handle audio interruptions (incoming phone calls, other media apps)
@@ -66,12 +86,19 @@ class SunZaraAudioHandler extends BaseAudioHandler with SeekHandler {
             _player.setVolume(0.5);
             break;
           case AudioInterruptionType.pause:
-          case AudioInterruptionType.unknown:
             if (_player.playing && !_userExplicitlyPaused) {
               _playInterrupted = true;
-              _player.pause();
+              unawaited(_player.pause().then((_) => _broadcastCurrentState()));
             } else {
               _playInterrupted = false;
+            }
+            break;
+          case AudioInterruptionType.unknown:
+            // Permanent focus loss (AUDIOFOCUS_LOSS): stay paused rather than auto-resuming.
+            _playInterrupted = false;
+            _userExplicitlyPaused = true;
+            if (_player.playing) {
+              unawaited(_player.pause().then((_) => _broadcastCurrentState()));
             }
             break;
         }
@@ -88,6 +115,7 @@ class SunZaraAudioHandler extends BaseAudioHandler with SeekHandler {
             }
             break;
           case AudioInterruptionType.unknown:
+            _playInterrupted = false;
             break;
         }
       }
@@ -154,11 +182,7 @@ class SunZaraAudioHandler extends BaseAudioHandler with SeekHandler {
     ));
   }
 
-  /// Sets active song and prepares audio source
-  Future<void> setSong(Song song, {bool autoPlay = true, Duration? startPosition}) async {
-    _userExplicitlyPaused = !autoPlay;
-    _playInterrupted = false;
-
+  MediaItem _buildMediaItem(Song song) {
     Uri? artUri;
     if (song.artworkUri != null && song.artworkUri!.isNotEmpty) {
       if (song.artworkUri!.startsWith('content://') ||
@@ -170,7 +194,7 @@ class SunZaraAudioHandler extends BaseAudioHandler with SeekHandler {
       }
     }
 
-    mediaItem.add(MediaItem(
+    return MediaItem(
       id: song.id,
       title: song.title,
       artist: song.artist,
@@ -180,7 +204,34 @@ class SunZaraAudioHandler extends BaseAudioHandler with SeekHandler {
       displayTitle: song.title,
       displaySubtitle: song.artist,
       displayDescription: song.album,
+    );
+  }
+
+  /// Sets restored song metadata without performing network resolution or buffering on bootup
+  void setRestoredMetadata(Song song, {Duration? position}) {
+    _userExplicitlyPaused = true;
+    _playInterrupted = false;
+    mediaItem.add(_buildMediaItem(song));
+    playbackState.add(playbackState.value.copyWith(
+      controls: const [
+        MediaControl.skipToPrevious,
+        MediaControl.play,
+        MediaControl.skipToNext,
+      ],
+      androidCompactActionIndices: const [0, 1, 2],
+      processingState: AudioProcessingState.ready,
+      playing: false,
+      updatePosition: position ?? Duration.zero,
     ));
+  }
+
+  /// Sets active song and prepares audio source
+  Future<void> setSong(Song song, {bool autoPlay = true, Duration? startPosition}) async {
+    final gen = ++_setSongGeneration;
+    _userExplicitlyPaused = !autoPlay;
+    _playInterrupted = false;
+
+    mediaItem.add(_buildMediaItem(song));
 
     // Immediately notify system of playback update
     playbackState.add(playbackState.value.copyWith(
@@ -205,18 +256,119 @@ class SunZaraAudioHandler extends BaseAudioHandler with SeekHandler {
       updatePosition: startPosition ?? Duration.zero,
     ));
 
+    debugPrint('SunZaraAudioHandler.setSong: id=${song.id}, title=${song.title}, artist=${song.artist}, isOnline=${song.isOnline}, filePath=${song.filePath}');
     try {
       if (song.filePath.isNotEmpty) {
-        await _player.setFilePath(song.filePath, initialPosition: startPosition);
+        String playUri = song.filePath;
+
+        // Resolve YouTube stream candidates if online track
+        List<String> onlineCandidates = const [];
+        String querySource = song.filePath;
+        if (song.isOnline) {
+          playbackState.add(playbackState.value.copyWith(
+            processingState: AudioProcessingState.buffering,
+          ));
+          if (querySource.isEmpty ||
+              querySource.startsWith('http://') ||
+              querySource.startsWith('https://')) {
+            querySource = 'yt:search:${song.title} ${song.artist}';
+          }
+          debugPrint('SunZaraAudioHandler: resolving online track "$querySource"');
+          onlineCandidates =
+              await YouTubeStreamService.instance.resolveAudioStreamCandidates(querySource);
+          if (gen != _setSongGeneration) return;
+          if (onlineCandidates.isNotEmpty) {
+            playUri = onlineCandidates.first;
+            debugPrint('SunZaraAudioHandler: got ${onlineCandidates.length} candidate URL(s)');
+          }
+        }
+
+        if (song.isOnline) {
+          var loaded = await _tryPrepareCandidates(onlineCandidates, startPosition, gen);
+          if (gen != _setSongGeneration) return;
+          if (!loaded) {
+            final freshSource = song.filePath.startsWith('yt:video:')
+                ? song.filePath
+                : 'yt:search:${song.title} ${song.artist}';
+            final freshCandidates = await YouTubeStreamService.instance
+                .resolveAudioStreamCandidates(freshSource, forceRefresh: true);
+            if (gen != _setSongGeneration) return;
+            loaded = await _tryPrepareCandidates(freshCandidates, startPosition, gen);
+            if (gen != _setSongGeneration) return;
+          }
+          if (!loaded) {
+            debugPrint('SunZaraAudioHandler: failed all stream candidates for ${song.title}');
+            playbackState.add(playbackState.value.copyWith(
+              processingState: AudioProcessingState.idle,
+              playing: false,
+            ));
+            onPlaybackError?.call('Could not play "${song.title}". Try another result.');
+            return;
+          }
+          if (_player.duration != null && _player.duration! > Duration.zero) {
+            mediaItem.add(mediaItem.value?.copyWith(duration: _player.duration));
+          }
+        } else if (playUri.startsWith('http://') || playUri.startsWith('https://')) {
+          await _player.setUrl(playUri, initialPosition: startPosition);
+          if (_player.duration != null && _player.duration! > Duration.zero) {
+            mediaItem.add(mediaItem.value?.copyWith(duration: _player.duration));
+          }
+        } else if (playUri.startsWith('content://')) {
+          // MediaStore can return a content URI when Android restricts access
+          // to the underlying filesystem path. Open it as a URI source rather
+          // than passing it to setFilePath, which only accepts file paths.
+          await _player.setAudioSource(
+            AudioSource.uri(Uri.parse(playUri)),
+            initialPosition: startPosition,
+          );
+        } else {
+          await _player.setFilePath(playUri, initialPosition: startPosition);
+        }
+        if (gen != _setSongGeneration) return;
         if (autoPlay) {
-          await _player.play();
+          // Do not await _player.play(): just_audio resolves play() only after pause/completion.
+          unawaited(_player.play());
         }
       }
-    } catch (e) {
-      // Handle inaccessible/unreadable audio files gracefully
+    } catch (e, stack) {
+      debugPrint('SunZaraAudioHandler error setting song: $e\n$stack');
+      onPlaybackError?.call('Playback error for "${song.title}".');
     }
 
     _broadcastCurrentState();
+  }
+
+  /// Routes YouTube URLs through LocalStreamProxy (bounded 512KB Range chunks
+  /// required by YouTube's CDN) with direct playback as fallback.
+  Future<bool> _tryPrepareCandidates(
+    List<String> urls,
+    Duration? startPosition,
+    int gen,
+  ) async {
+    await LocalStreamProxy.instance.ensureStarted();
+    for (final url in urls) {
+      if (gen != _setSongGeneration) return false;
+      try {
+        final proxyUri = LocalStreamProxy.instance.registerUrl(url);
+        await _player.setUrl(proxyUri, initialPosition: startPosition);
+        return true;
+      } catch (proxyErr) {
+        debugPrint('SunZaraAudioHandler proxy setUrl failed: $proxyErr, trying direct');
+        if (gen != _setSongGeneration) return false;
+        try {
+          final hdrs = YouTubeStreamService.headersForUrl(url);
+          await _player.setUrl(
+            url,
+            headers: hdrs.isEmpty ? null : hdrs,
+            initialPosition: startPosition,
+          );
+          return true;
+        } catch (directErr) {
+          debugPrint('SunZaraAudioHandler direct setUrl failed: $directErr');
+        }
+      }
+    }
+    return false;
   }
 
   @override
@@ -226,7 +378,7 @@ class SunZaraAudioHandler extends BaseAudioHandler with SeekHandler {
     if (onPlayRequested != null) {
       await onPlayRequested!();
     } else {
-      await _player.play();
+      unawaited(_player.play());
     }
     _broadcastCurrentState();
   }

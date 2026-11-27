@@ -49,6 +49,11 @@ class _SongArtworkState extends State<SongArtwork> {
   }
 
   void _resolveArtwork() {
+    final uri = widget.song.artworkUri;
+    if (uri != null && (uri.startsWith('http://') || uri.startsWith('https://'))) {
+      return;
+    }
+
     final cacheKey = '${widget.song.id}_${widget.size > 150 ? "lg" : "sm"}';
     if (SongArtwork._memoryCache.containsKey(cacheKey)) {
       _artworkBytes = SongArtwork._memoryCache[cacheKey];
@@ -101,8 +106,17 @@ class _SongArtworkState extends State<SongArtwork> {
   Widget build(BuildContext context) {
     final radius = widget.borderRadius ?? BorderRadius.circular(widget.size > 80 ? 16 : 8);
 
+    final uri = widget.song.artworkUri;
     Widget imageContent;
-    if (_artworkBytes != null) {
+    if (uri != null && (uri.startsWith('http://') || uri.startsWith('https://'))) {
+      imageContent = Image.network(
+        uri,
+        width: widget.size,
+        height: widget.size,
+        fit: BoxFit.cover,
+        errorBuilder: (_, _, _) => _buildFallback(),
+      );
+    } else if (_artworkBytes != null) {
       imageContent = Image.memory(
         _artworkBytes!,
         width: widget.size,

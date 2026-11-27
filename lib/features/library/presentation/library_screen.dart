@@ -11,6 +11,9 @@ import '../../../core/widgets/playing_equalizer_bars.dart';
 import '../../../core/widgets/song_artwork.dart';
 import '../../audio/domain/playback_state_model.dart';
 import '../../audio/presentation/playback_controller.dart';
+import '../../now_playing/presentation/widgets/mini_player.dart';
+import '../../search/domain/voice_search_service.dart';
+import '../../search/presentation/online_search_screen.dart';
 import '../domain/music_repository.dart';
 
 enum LibrarySortOption {
@@ -177,6 +180,21 @@ class _LibraryScreenState extends State<LibraryScreen> with SingleTickerProvider
               },
             ),
           ] else ...[
+            IconButton(
+              icon: Icon(Icons.travel_explore_rounded, color: AppColors.primary),
+              tooltip: 'Search Online Music',
+              onPressed: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => OnlineSearchScreen(
+                      repository: widget.repository,
+                      playbackController: widget.playbackController,
+                      initialQuery: _searchQuery,
+                    ),
+                  ),
+                );
+              },
+            ),
             PopupMenuButton<LibrarySortOption>(
               icon: const Icon(Icons.sort_rounded),
               tooltip: 'Sort By',
@@ -231,15 +249,41 @@ class _LibraryScreenState extends State<LibraryScreen> with SingleTickerProvider
                       hintText: 'Search songs, albums, artists...',
                       hintStyle: AppTypography.caption,
                       prefixIcon: Icon(Icons.search_rounded, color: AppColors.textMuted),
-                      suffixIcon: _searchQuery.isNotEmpty
-                          ? IconButton(
+                      suffixIcon: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (_searchQuery.isNotEmpty)
+                            IconButton(
+                              tooltip: 'Clear search',
                               icon: const Icon(Icons.clear_rounded, size: 20),
                               onPressed: () {
                                 _searchController.clear();
                                 setState(() => _searchQuery = '');
                               },
-                            )
-                          : null,
+                            ),
+                          IconButton(
+                            tooltip: 'Voice Search',
+                            icon: Icon(Icons.mic_rounded, color: AppColors.primary, size: 20),
+                            onPressed: () async {
+                              try {
+                                final spoken = await VoiceSearchService.instance.listenForQuery(
+                                  context: context,
+                                  playbackController: widget.playbackController,
+                                );
+                                if (!mounted || spoken == null || spoken.isEmpty) return;
+                                _searchController.text = spoken;
+                                _searchController.selection = TextSelection.fromPosition(
+                                  TextPosition(offset: spoken.length),
+                                );
+                                setState(() => _searchQuery = spoken);
+                              } on VoiceSearchUnavailableException catch (e) {
+                                if (!mounted) return;
+                                _showFeedback(e.message);
+                              }
+                            },
+                          ),
+                        ],
+                      ),
                       filled: true,
                       fillColor: AppColors.surface,
                       contentPadding: const EdgeInsets.symmetric(vertical: 0, horizontal: 16),
@@ -258,6 +302,50 @@ class _LibraryScreenState extends State<LibraryScreen> with SingleTickerProvider
                     ),
                   ),
                 ),
+                if (_searchQuery.trim().isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(12),
+                      onTap: () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => OnlineSearchScreen(
+                              repository: widget.repository,
+                              playbackController: widget.playbackController,
+                              initialQuery: _searchQuery.trim(),
+                            ),
+                          ),
+                        );
+                      },
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                        decoration: BoxDecoration(
+                          color: AppColors.primary.withOpacity(0.12),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: AppColors.primary.withOpacity(0.35)),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(Icons.public_rounded, color: AppColors.primary, size: 18),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Text(
+                                'Search "${_searchQuery.trim()}" online',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: AppTypography.body.copyWith(
+                                  color: AppColors.primary,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                            Icon(Icons.arrow_forward_ios_rounded, color: AppColors.primary, size: 14),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
                 Expanded(
                   child: TabBarView(
                     controller: _tabController,
@@ -385,7 +473,7 @@ class _LibraryScreenState extends State<LibraryScreen> with SingleTickerProvider
                     widget.playbackController.playSong(
                       song,
                       PlaybackContext.library,
-                      songs,
+                      [song],
                     );
                   }
                 },
@@ -551,7 +639,7 @@ class _LibraryScreenState extends State<LibraryScreen> with SingleTickerProvider
                 title: const Text('Play Now'),
                 onTap: () {
                   Navigator.pop(context);
-                  widget.playbackController.playSong(song, PlaybackContext.library, contextTracks);
+                  widget.playbackController.playSong(song, PlaybackContext.library, [song]);
                 },
               ),
               ListTile(
@@ -716,12 +804,24 @@ class _SubcollectionDetailScreen extends StatelessWidget {
     return ListenableBuilder(
       listenable: ThemeController.instance,
       builder: (context, _) {
-        return Scaffold(
-          backgroundColor: AppColors.background,
-          appBar: AppBar(
-        title: Text(title, style: AppTypography.headingSmall),
-      ),
-      body: Column(
+        return ValueListenableBuilder<PlaybackStateModel>(
+          valueListenable: playbackController,
+          builder: (context, playbackState, _) {
+            return Scaffold(
+              backgroundColor: AppColors.background,
+              appBar: AppBar(
+                title: Text(title, style: AppTypography.headingSmall),
+              ),
+              bottomNavigationBar: playbackState.currentSong != null
+                  ? SafeArea(
+                      top: false,
+                      child: MiniPlayer(
+                        playbackState: playbackState,
+                        controller: playbackController,
+                      ),
+                    )
+                  : null,
+              body: Column(
         children: [
           Padding(
             padding: const EdgeInsets.all(16),
@@ -810,6 +910,8 @@ class _SubcollectionDetailScreen extends StatelessWidget {
         ],
       ),
     );
+          },
+        );
       },
     );
   }

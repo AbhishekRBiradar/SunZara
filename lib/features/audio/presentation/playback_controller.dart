@@ -9,6 +9,7 @@ import '../../library/domain/music_repository.dart';
 import '../../queue/domain/queue_manager.dart';
 import '../domain/playback_state_model.dart';
 import '../domain/sunzara_audio_handler.dart';
+import '../domain/youtube_stream_service.dart';
 
 // Riverpod Provider
 final playbackControllerProvider = Provider<PlaybackController>((ref) {
@@ -42,12 +43,26 @@ class PlaybackController extends ValueNotifier<PlaybackStateModel> {
     _audioHandler.onPlayRequested = () async {
       if (state.currentSong == null && _queueManager.fullUpcomingQueue.isNotEmpty) {
         await next();
+      } else if (state.currentSong != null &&
+          _audioHandler.player.processingState == ProcessingState.idle) {
+        await _audioHandler.setSong(
+          state.currentSong!,
+          autoPlay: true,
+          startPosition: state.position,
+        );
       } else {
-        await _audioHandler.player.play();
+        unawaited(_audioHandler.player.play());
       }
     };
     _audioHandler.onPauseRequested = () async {
       await _audioHandler.player.pause();
+    };
+    _audioHandler.onPlaybackError = (msg) {
+      state = state.copyWith(
+        isPlaying: false,
+        isBuffering: false,
+        errorMessage: msg,
+      );
     };
 
     // Player state (playing, buffering, completed)
@@ -100,10 +115,15 @@ class PlaybackController extends ValueNotifier<PlaybackStateModel> {
     );
 
     _syncStateFromQueueManager();
+    state = state.copyWith(clearErrorMessage: true);
 
     await _audioHandler.setSong(song, autoPlay: true);
+    if (song.isOnline) {
+      await _repository.insertOrUpdateSong(song);
+    }
     await _repository.recordSongPlayed(song.id);
     _persistCurrentState();
+    _triggerNextTrackPreload();
   }
 
   /// Toggle Play/Pause
@@ -113,6 +133,13 @@ class PlaybackController extends ValueNotifier<PlaybackStateModel> {
     } else {
       if (state.currentSong == null && _queueManager.fullUpcomingQueue.isNotEmpty) {
         await next();
+      } else if (state.currentSong != null &&
+          _audioHandler.player.processingState == ProcessingState.idle) {
+        await _audioHandler.setSong(
+          state.currentSong!,
+          autoPlay: true,
+          startPosition: state.position,
+        );
       } else {
         await _audioHandler.play();
       }
@@ -127,6 +154,7 @@ class PlaybackController extends ValueNotifier<PlaybackStateModel> {
       await _audioHandler.setSong(nextSong, autoPlay: true);
       await _repository.recordSongPlayed(nextSong.id);
       _persistCurrentState();
+      _triggerNextTrackPreload();
     } else {
       // Reached end of queue
       await _audioHandler.stop();
@@ -153,6 +181,7 @@ class PlaybackController extends ValueNotifier<PlaybackStateModel> {
       _syncStateFromQueueManager();
       await _audioHandler.setSong(prevSong, autoPlay: true);
       _persistCurrentState();
+      _triggerNextTrackPreload();
     } else {
       await _audioHandler.seek(Duration.zero);
     }
@@ -194,6 +223,7 @@ class PlaybackController extends ValueNotifier<PlaybackStateModel> {
     _queueManager.playNext(song);
     _syncStateFromQueueManager();
     _persistCurrentState();
+    _triggerNextTrackPreload();
   }
 
   /// Add to Queue (appends to manual queue)
@@ -201,6 +231,7 @@ class PlaybackController extends ValueNotifier<PlaybackStateModel> {
     _queueManager.addToQueue(song);
     _syncStateFromQueueManager();
     _persistCurrentState();
+    _triggerNextTrackPreload();
   }
 
   /// Drag-and-drop reorder in manual queue
@@ -239,19 +270,22 @@ class PlaybackController extends ValueNotifier<PlaybackStateModel> {
       await _audioHandler.setSong(song, autoPlay: true);
       await _repository.recordSongPlayed(song.id);
       _persistCurrentState();
+      _triggerNextTrackPreload();
     }
   }
 
-  /// Toggle favorite on current song
+  /// Toggle favorite on current song and sync "Liked Songs" playlist
   Future<void> toggleFavorite() async {
     final current = state.currentSong;
     if (current == null) return;
 
     final newStatus = !current.isFavorite;
-    await _repository.toggleFavorite(current.id, newStatus);
+    await _repository.setSongFavorite(current, newStatus);
     final updated = current.copyWith(isFavorite: newStatus);
 
+    _queueManager.updateSongFavoriteStatus(updated.id, newStatus);
     state = state.copyWith(currentSong: updated);
+    _persistCurrentState();
   }
 
   /// Restores persisted playback state on app launch (paused by default)
@@ -311,12 +345,17 @@ class PlaybackController extends ValueNotifier<PlaybackStateModel> {
         automaticPool: _queueManager.automaticPool,
       );
 
-      // Prepare audio engine at restored position without auto-playing
-      await _audioHandler.setSong(
-        song,
-        autoPlay: false,
-        startPosition: Duration(milliseconds: savedState.positionMs),
-      );
+      // Prepare audio engine at restored position without blocking startup on network streams
+      final restoredPos = Duration(milliseconds: savedState.positionMs);
+      if (song.isOnline) {
+        _audioHandler.setRestoredMetadata(song, position: restoredPos);
+      } else {
+        await _audioHandler.setSong(
+          song,
+          autoPlay: false,
+          startPosition: restoredPos,
+        );
+      }
     } catch (e) {
       // Safe fallback on corrupt persistence data
     }
@@ -347,6 +386,25 @@ class PlaybackController extends ValueNotifier<PlaybackStateModel> {
       automaticPoolJson: jsonEncode(exportedQueue['automaticPool']),
       shuffleStateJson: jsonEncode(exportedQueue['shuffleEngine']),
     );
+  }
+
+  void _triggerNextTrackPreload() {
+    final upcomingSongs = _queueManager.peekUpcoming(count: 3);
+    for (int i = 0; i < upcomingSongs.length; i++) {
+      final s = upcomingSongs[i];
+      if (s.isOnline) {
+        // Pre-resolve video ID for top 3 upcoming tracks
+        final query = s.filePath.startsWith('yt:search:')
+            ? s.filePath.replaceFirst('yt:search:', '')
+            : '${s.title} ${s.artist}';
+        YouTubeStreamService.instance.preloadVideoId(query);
+
+        // Preload audio stream for immediate next track
+        if (i == 0) {
+          YouTubeStreamService.instance.preloadStream(s.filePath);
+        }
+      }
+    }
   }
 
   @override

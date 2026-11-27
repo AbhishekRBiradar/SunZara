@@ -15,6 +15,7 @@ class PlaybackStateModel {
   final List<QueueItem> manualQueue;
   final List<QueueItem> automaticPool;
   final int? audioSessionId;
+  final String? errorMessage;
 
   const PlaybackStateModel({
     this.currentSong,
@@ -29,6 +30,7 @@ class PlaybackStateModel {
     this.manualQueue = const [],
     this.automaticPool = const [],
     this.audioSessionId,
+    this.errorMessage,
   });
 
   List<QueueItem> get fullUpcomingQueue => [
@@ -54,7 +56,9 @@ class PlaybackStateModel {
     List<QueueItem>? manualQueue,
     List<QueueItem>? automaticPool,
     int? audioSessionId,
+    String? errorMessage,
     bool clearCurrentSong = false,
+    bool clearErrorMessage = false,
   }) {
     return PlaybackStateModel(
       currentSong: clearCurrentSong ? null : (currentSong ?? this.currentSong),
@@ -69,6 +73,7 @@ class PlaybackStateModel {
       manualQueue: manualQueue ?? this.manualQueue,
       automaticPool: automaticPool ?? this.automaticPool,
       audioSessionId: audioSessionId ?? this.audioSessionId,
+      errorMessage: clearErrorMessage ? null : (errorMessage ?? this.errorMessage),
     );
   }
 }

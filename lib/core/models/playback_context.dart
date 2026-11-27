@@ -5,6 +5,7 @@ enum PlaybackContextType {
   artist,
   folder,
   favorites,
+  search,
 }
 
 enum RepeatMode {

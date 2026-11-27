@@ -144,6 +144,36 @@ void main() {
       expect(updatedPlSongs[0].id, '2');
     });
 
+    test('Liking a song auto-creates and syncs "Liked Songs" playlist', () async {
+      final onlineSong = Song(
+        id: 'yt_abc',
+        title: 'Online Track',
+        artist: 'Artist',
+        album: 'YouTube',
+        durationMs: 210000,
+        fileSize: 0,
+        filePath: 'yt:video:abc',
+        folder: 'Online Stream',
+      );
+
+      await repo.setSongFavorite(onlineSong, true);
+      // Calling again should not duplicate entry
+      await repo.toggleFavorite(onlineSong.id, true);
+
+      final playlists = await repo.getAllPlaylists();
+      final likedPl = playlists.where((p) => p.name == AppDatabase.likedSongsPlaylistName).toList();
+      expect(likedPl.length, 1);
+
+      final plSongs = await repo.getPlaylistSongs(likedPl.first.id);
+      expect(plSongs.length, 1);
+      expect(plSongs.first.id, 'yt_abc');
+      expect(plSongs.first.isFavorite, isTrue);
+
+      await repo.toggleFavorite(onlineSong.id, false);
+      final afterUnlike = await repo.getPlaylistSongs(likedPl.first.id);
+      expect(afterUnlike, isEmpty);
+    });
+
     test('Playback state persistence and retrieval', () async {
       await repo.savePlaybackState(
         currentSongId: '10',

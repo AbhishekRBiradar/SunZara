@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
+import '../../../core/services/app_version_service.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_typography.dart';
 import '../../../core/theme/sunzara_theme_preset.dart';
@@ -8,7 +9,6 @@ import '../../../core/widgets/sunzara_logo.dart';
 import '../../audio/presentation/playback_controller.dart';
 import '../../library/data/mediastore_scanner.dart';
 import '../../library/domain/music_repository.dart';
-import '../domain/spotify_importer.dart';
 
 class SettingsScreen extends StatefulWidget {
   final MusicRepository repository;
@@ -27,86 +27,12 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  late final SpotifyImporter _spotifyImporter;
+  late final Future<AppVersionInfo> _versionFuture;
 
   @override
   void initState() {
     super.initState();
-    _spotifyImporter = SpotifyImporter(widget.repository);
-  }
-
-  void _showSpotifyImportDialog() {
-    final textController = TextEditingController();
-    showDialog(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          backgroundColor: AppColors.surfaceElevated,
-          title: Text('Import Spotify Liked Songs', style: AppTypography.headingSmall),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Paste Spotify JSON tracks export or playlist payload below. SunZara will match the tracks with your local library.',
-                style: AppTypography.caption,
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: textController,
-                maxLines: 5,
-                style: AppTypography.body,
-                decoration: InputDecoration(
-                  hintText: 'Paste JSON here...',
-                  hintStyle: AppTypography.caption,
-                  filled: true,
-                  fillColor: AppColors.surface,
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-                ),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel'),
-            ),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.primary,
-                foregroundColor: AppColors.background,
-              ),
-              onPressed: () async {
-                final jsonStr = textController.text.trim();
-                if (jsonStr.isNotEmpty) {
-                  Navigator.pop(context);
-                  final result = await _spotifyImporter.importAndMatchJson(jsonStr);
-                  if (!context.mounted) return;
-                  showDialog(
-                    context: context,
-                    builder: (dialogCtx) => AlertDialog(
-                      backgroundColor: AppColors.surfaceElevated,
-                      title: Text('Import Results', style: AppTypography.headingSmall),
-                      content: Text(
-                        'Processed ${result.totalImported} Spotify tracks.\nMatched ${result.localMatches} songs in your local storage.\nAdded to playlist "${result.playlistName}".',
-                        style: AppTypography.body,
-                      ),
-                      actions: [
-                        TextButton(
-                          onPressed: () => Navigator.pop(dialogCtx),
-                          child: const Text('OK'),
-                        ),
-                      ],
-                    ),
-                  );
-                }
-              },
-              child: const Text('Match & Import'),
-            ),
-          ],
-        );
-      },
-    );
+    _versionFuture = AppVersionService.instance.getVersionInfo();
   }
 
   void _triggerScan() {
@@ -365,16 +291,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           Divider(color: AppColors.divider),
 
-          // Music Sources
-          _buildCategoryHeader('MUSIC SOURCES'),
-          ListTile(
-            leading: Icon(Icons.import_export_rounded, color: AppColors.primary),
-            title: Text('Spotify Liked Songs Import', style: AppTypography.body),
-            subtitle: Text('Match Spotify tracks with local files', style: AppTypography.caption),
-            onTap: _showSpotifyImportDialog,
-          ),
-          Divider(color: AppColors.divider),
-
           // Privacy
           _buildCategoryHeader('PRIVACY'),
           ListTile(
@@ -406,7 +322,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       const SizedBox(height: 2),
                       Text('Your music. Your world.', style: AppTypography.caption),
                       const SizedBox(height: 2),
-                      Text('Version 1.0.0 • Offline Premium Player', style: AppTypography.caption.copyWith(color: AppColors.primary)),
+                      FutureBuilder<AppVersionInfo>(
+                        future: _versionFuture,
+                        initialData: AppVersionInfo.fallback,
+                        builder: (context, snapshot) {
+                          final version = snapshot.data ?? AppVersionInfo.fallback;
+                          return Text(
+                            '${version.displayLabel} • Offline & Online Player',
+                            style: AppTypography.caption.copyWith(color: AppColors.primary),
+                          );
+                        },
+                      ),
                     ],
                   ),
                 ),
@@ -436,3 +362,4 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 }
+

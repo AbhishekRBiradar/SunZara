@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:sunzara/core/models/album.dart';
 import 'package:sunzara/core/models/artist.dart';
 import 'package:sunzara/core/models/playback_context.dart';
@@ -7,24 +8,69 @@ import 'package:sunzara/features/database/app_database.dart';
 
 class MusicRepository {
   final AppDatabase _db;
+  final StreamController<void> _changesController = StreamController<void>.broadcast();
 
   MusicRepository(this._db);
 
   AppDatabase get database => _db;
+  Stream<void> get changes => _changesController.stream;
+
+  void _notifyChanges() {
+    if (!_changesController.isClosed) {
+      _changesController.add(null);
+    }
+  }
 
   // Songs
   Future<List<Song>> getAllSongs() => _db.getAllSongs();
   Stream<List<Song>> watchAllSongs() => _db.watchAllSongs();
   Future<Song?> getSongById(String id) => _db.getSongById(id);
-  Future<void> insertOrUpdateSong(Song song) => _db.insertOrUpdateSong(song);
-  Future<void> insertSongsBatch(List<Song> songs) => _db.insertSongsBatch(songs);
-  Future<void> deleteSong(String id) => _db.deleteSong(id);
-  Future<void> deleteMissingSongs(List<String> existingPaths) =>
-      _db.deleteMissingSongs(existingPaths);
-  Future<void> toggleFavorite(String songId, bool isFavorite) =>
-      _db.toggleFavorite(songId, isFavorite);
+  Future<void> insertOrUpdateSong(Song song) async {
+    await _db.insertOrUpdateSong(song);
+    _notifyChanges();
+  }
+
+  Future<void> insertSongsBatch(List<Song> songs) async {
+    await _db.insertSongsBatch(songs);
+    _notifyChanges();
+  }
+
+  Future<void> deleteSong(String id) async {
+    await _db.deleteSong(id);
+    _notifyChanges();
+  }
+
+  Future<void> clearSpotifyData() async {
+    await _db.clearSpotifyData();
+    _notifyChanges();
+  }
+
+  Future<void> deleteMissingSongs(List<String> existingPaths) async {
+    await _db.deleteMissingSongs(existingPaths);
+    _notifyChanges();
+  }
+
+  Future<void> toggleFavorite(String songId, bool isFavorite) async {
+    await _db.toggleFavorite(songId, isFavorite);
+    _notifyChanges();
+  }
+
+  /// Ensures [song] exists in local storage, sets its favorite flag,
+  /// and keeps the "Liked Songs" playlist synchronized.
+  Future<void> setSongFavorite(Song song, bool isFavorite) async {
+    final existing = await _db.getSongById(song.id);
+    if (existing == null) {
+      await _db.insertOrUpdateSong(song.copyWith(isFavorite: isFavorite));
+    }
+    await _db.toggleFavorite(song.id, isFavorite);
+    _notifyChanges();
+  }
+
   Future<List<Song>> getFavoriteSongs() => _db.getFavoriteSongs();
-  Future<void> recordSongPlayed(String songId) => _db.recordSongPlayed(songId);
+  Future<void> recordSongPlayed(String songId) async {
+    await _db.recordSongPlayed(songId);
+    _notifyChanges();
+  }
 
   // Smart Collections
   Future<List<Song>> getRecentlyAdded({int limit = 50}) => _db.getRecentlyAddedSongs(limit: limit);
@@ -136,13 +182,29 @@ class MusicRepository {
       createdAt: DateTime.now(),
     );
     await _db.createPlaylist(playlist);
+    _notifyChanges();
   }
 
-  Future<void> deletePlaylist(String playlistId) => _db.deletePlaylist(playlistId);
-  Future<void> addSongToPlaylist(String playlistId, String songId) =>
-      _db.addSongToPlaylist(playlistId, songId);
-  Future<void> removeSongFromPlaylist(String playlistId, String songId) =>
-      _db.removeSongFromPlaylist(playlistId, songId);
+  Future<void> deletePlaylist(String playlistId) async {
+    await _db.deletePlaylist(playlistId);
+    _notifyChanges();
+  }
+
+  Future<void> addSongToPlaylist(String playlistId, String songId) async {
+    await _db.addSongToPlaylist(playlistId, songId);
+    _notifyChanges();
+  }
+
+  Future<void> addSongsToPlaylistBatch(String playlistId, List<String> songIds) async {
+    await _db.addSongsToPlaylistBatch(playlistId, songIds);
+    _notifyChanges();
+  }
+
+  Future<void> removeSongFromPlaylist(String playlistId, String songId) async {
+    await _db.removeSongFromPlaylist(playlistId, songId);
+    _notifyChanges();
+  }
+
   Future<List<Song>> getPlaylistSongs(String playlistId) =>
       _db.getPlaylistSongs(playlistId);
 

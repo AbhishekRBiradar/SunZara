@@ -46,3 +46,28 @@ app.*.map.json
 
 # Widget Preview related
 .widget_preview/
+
+# Credentials, API Keys & Local Secrets
+.env
+.env.*
+*.keystore
+*.jks
+key.properties
+**/key.properties
+android/local.properties
+google-services.json
+GoogleService-Info.plist
+*secrets*.json
+*credentials*.json
+
+# Temporary debug databases, builds & screenshots
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.db
+*.apk
+*.aab
+current_device_state.png
+screenshot_device.png
+screenshot_updated.png
+

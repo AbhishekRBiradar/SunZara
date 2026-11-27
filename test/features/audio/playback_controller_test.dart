@@ -133,5 +133,38 @@ void main() {
       controller.toggleShuffle();
       expect(controller.state.isShuffleEnabled, !initialShuffle);
     });
+
+    test('Single-track selection leaves automatic queue empty and preserves like across addToQueue', () async {
+      final s1 = createSong('1');
+      final s2 = createSong('2');
+
+      await controller.playSong(
+        s1,
+        const PlaybackContext(
+          type: PlaybackContextType.search,
+          id: 'online_search',
+          name: 'Online Search',
+        ),
+        [s1],
+      );
+
+      expect(controller.state.currentSong?.id, '1');
+      expect(controller.state.automaticPool, isEmpty);
+      expect(controller.state.manualQueue, isEmpty);
+
+      await controller.toggleFavorite();
+      expect(controller.state.currentSong?.isFavorite, isTrue);
+
+      // Adding another song via queue must preserve currentSong's liked status
+      controller.addToQueue(s2);
+      expect(controller.state.manualQueue.length, 1);
+      expect(controller.state.manualQueue.first.song.id, '2');
+      expect(controller.state.currentSong?.isFavorite, isTrue);
+
+      final playlists = await repo.getAllPlaylists();
+      final liked = playlists.firstWhere((p) => p.name == AppDatabase.likedSongsPlaylistName);
+      final likedSongs = await repo.getPlaylistSongs(liked.id);
+      expect(likedSongs.map((s) => s.id), contains('1'));
+    });
   });
 }

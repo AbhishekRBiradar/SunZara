@@ -69,6 +69,9 @@ class PlaybackStateTable extends Table {
 
 @DriftDatabase(tables: [SongsTable, PlaylistsTable, PlaylistSongsTable, PlaybackStateTable])
 class AppDatabase extends _$AppDatabase {
+  static const String likedSongsPlaylistId = 'pl_liked_songs';
+  static const String likedSongsPlaylistName = 'Liked Songs';
+
   AppDatabase([QueryExecutor? e]) : super(e ?? driftDatabase(name: 'sunzara_db'));
 
   @override
@@ -151,14 +154,74 @@ class AppDatabase extends _$AppDatabase {
     await (delete(playlistSongsTable)..where((t) => t.songId.equals(id))).go();
   }
 
+  /// Removes any previously imported Spotify playlists and tracks
+  Future<void> clearSpotifyData() async {
+    final spPlaylists = await (select(playlistsTable)
+          ..where((t) => t.name.equals('Spotify Liked Songs')))
+        .get();
+    for (final pl in spPlaylists) {
+      await (delete(playlistSongsTable)..where((t) => t.playlistId.equals(pl.id))).go();
+      await (delete(playlistsTable)..where((t) => t.id.equals(pl.id))).go();
+    }
+    await (delete(songsTable)..where((t) => t.id.like('sp_%'))).go();
+  }
+
   Future<void> deleteMissingSongs(List<String> existingFilePaths) async {
-    await (delete(songsTable)..where((t) => t.filePath.isNotIn(existingFilePaths))).go();
+    await (delete(songsTable)
+          ..where((t) =>
+              t.folder.isNotValue('Online Stream') &
+              t.filePath.isNotIn(existingFilePaths) &
+              t.filePath.like('yt:%').not() &
+              t.filePath.like('http%').not()))
+        .go();
   }
 
   Future<void> toggleFavorite(String songId, bool isFavorite) async {
     await (update(songsTable)..where((t) => t.id.equals(songId))).write(
       SongsTableCompanion(isFavorite: Value(isFavorite)),
     );
+    await _syncLikedSongsPlaylist(songId, isFavorite);
+  }
+
+  Future<String?> _findLikedSongsPlaylistId() async {
+    final byId = await (select(playlistsTable)
+          ..where((t) => t.id.equals(likedSongsPlaylistId)))
+        .getSingleOrNull();
+    if (byId != null) return byId.id;
+
+    final all = await select(playlistsTable).get();
+    for (final pl in all) {
+      if (pl.name.trim().toLowerCase() == likedSongsPlaylistName.toLowerCase()) {
+        return pl.id;
+      }
+    }
+    return null;
+  }
+
+  Future<String> _ensureLikedSongsPlaylistId() async {
+    final existingId = await _findLikedSongsPlaylistId();
+    if (existingId != null) return existingId;
+
+    await createPlaylist(
+      Playlist(
+        id: likedSongsPlaylistId,
+        name: likedSongsPlaylistName,
+        createdAt: DateTime.now(),
+      ),
+    );
+    return likedSongsPlaylistId;
+  }
+
+  Future<void> _syncLikedSongsPlaylist(String songId, bool isFavorite) async {
+    if (isFavorite) {
+      final playlistId = await _ensureLikedSongsPlaylistId();
+      await addSongToPlaylist(playlistId, songId);
+    } else {
+      final playlistId = await _findLikedSongsPlaylistId();
+      if (playlistId != null) {
+        await removeSongFromPlaylist(playlistId, songId);
+      }
+    }
   }
 
   Future<List<Song>> getFavoriteSongs() async {
@@ -285,6 +348,8 @@ class AppDatabase extends _$AppDatabase {
     final existing = await (select(playlistSongsTable)
           ..where((t) => t.playlistId.equals(playlistId)))
         .get();
+    if (existing.any((e) => e.songId == songId)) return;
+
     final nextSortOrder = existing.isEmpty
         ? 0
         : (existing.map((e) => e.sortOrder).reduce((a, b) => a > b ? a : b) + 1);
@@ -296,6 +361,27 @@ class AppDatabase extends _$AppDatabase {
         sortOrder: Value(nextSortOrder),
       ),
     );
+  }
+
+  Future<void> addSongsToPlaylistBatch(String playlistId, List<String> songIds) async {
+    if (songIds.isEmpty) return;
+    final existing = await (select(playlistSongsTable)
+          ..where((t) => t.playlistId.equals(playlistId)))
+        .get();
+    var sortOrder = existing.isEmpty
+        ? 0
+        : (existing.map((e) => e.sortOrder).reduce((a, b) => a > b ? a : b) + 1);
+
+    await batch((b) {
+      b.insertAllOnConflictUpdate(
+        playlistSongsTable,
+        songIds.map((songId) => PlaylistSongsTableCompanion(
+              playlistId: Value(playlistId),
+              songId: Value(songId),
+              sortOrder: Value(sortOrder++),
+            )),
+      );
+    });
   }
 
   Future<void> removeSongFromPlaylist(String playlistId, String songId) async {

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../../core/models/playback_context.dart';
 import '../../../core/models/song.dart';
@@ -27,15 +28,25 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
   bool _isLoading = true;
   bool _isSearching = false;
   String _searchQuery = '';
+  StreamSubscription<void>? _repoSub;
 
   @override
   void initState() {
     super.initState();
     _loadFavorites();
+    _repoSub = widget.repository.changes.listen((_) {
+      _loadFavorites(showLoading: false);
+    });
   }
 
-  Future<void> _loadFavorites() async {
-    setState(() => _isLoading = true);
+  @override
+  void dispose() {
+    _repoSub?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _loadFavorites({bool showLoading = true}) async {
+    if (showLoading) setState(() => _isLoading = true);
     final favs = await widget.repository.getFavoriteSongs();
     if (mounted) {
       setState(() {
